@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Secrets scanning (repo)
+      - name: Gitleaks (secrets scan)
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: "--verbose --redact"
+
+      # IaC scanning (terraform/k8s/helm if present)
+      - name: Checkov (IaC scan)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          framework: terraform,kubernetes,helm
+          quiet: true
+          soft_fail: false
+
+      # Dockerfile lint
+      - name: Hadolint (Dockerfile lint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: app/Dockerfile
+
+      # Build image (safer context)
+      - name: Build container
+        run: docker build -t user-api:${{ github.sha }} -f app/Dockerfile app
+
+      # Scan image
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: user-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
